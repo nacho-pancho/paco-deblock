@@ -1,2 +1,4 @@
-# paco-deblock
-Deblocking using PACO
+# PACO Deblocking
+
+These are the sources of the PACO deblocking method.
+

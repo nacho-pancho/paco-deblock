@@ -1,0 +1,11 @@
+barb2.pgm
+barbara.pgm
+boat.pgm
+camera.pgm
+fingerprint.pgm
+goldhill.pgm
+lena.pgm
+mandrill.pgm
+man.pgm
+peppers.pgm
+yuki.pgm

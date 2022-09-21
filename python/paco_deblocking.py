@@ -145,7 +145,7 @@ class PacoDeblocking(paco.PACO):
         if px is None:
             px = np.empty(self.mapper.patch_matrix_shape)
         np.copyto(px,x)
-        for J in range(5): # brutal, bad, lazy
+        for J in range(10): # brutal, bad, lazy
             prevx = np.copy(px)
             self.do_idct(px,px)
             # constraint on C
@@ -157,8 +157,11 @@ class PacoDeblocking(paco.PACO):
             viol_lo = np.mean(np.maximum(0,self.box_lo-px))
             px = np.minimum(self.box_hi,np.maximum(self.box_lo,px))
             print('POCS',J,end=' ')
-            print('dif',np.linalg.norm(px-prevx,'fro')/(1e-10+np.linalg.norm(px,'fro')),end=' ')
+            dif = np.linalg.norm(px-prevx,'fro')/(1e-10+np.linalg.norm(px,'fro')),
+            print('dif',dif,end=' ')
             print('viol: lo',viol_lo,'up',viol_hi)
+            if dif < 1e-3:
+                break
         print()
         return px
 
@@ -181,7 +184,7 @@ class PacoDeblocking(paco.PACO):
         p = np.zeros(px.shape)
         q = np.zeros(px.shape)
         y = np.zeros(px.shape)
-        for J in range(5): # brutal, bad, lazy
+        for J in range(50): # brutal, bad, lazy
             prevx = np.copy(px)
             self.do_idct(px+p,px)
             # constraint on C
@@ -209,8 +212,11 @@ class PacoDeblocking(paco.PACO):
             q += y
             q -= px
             print('POCS',J,end=' ')
-            print('dif',np.linalg.norm(px-prevx,'fro')/(1e-10+np.linalg.norm(px,'fro')),end=' ')
+            dif = np.linalg.norm(px-prevx,'fro')/(1e-10+np.linalg.norm(px,'fro')),
+            print('dif',dif,end=' ')
             print('viol: lo',viol_lo,'up',viol_hi)
+            if dif < 1e-3:
+                break
         print()
         return px
 
@@ -229,7 +235,7 @@ if __name__ == '__main__':
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("-s", "--stride", type=int, default=1,
                         help="patch stride")
-    parser.add_argument("-t", "--tau", type=float, default=0.1,
+    parser.add_argument("-t", "--tau", type=float, default=1.0,
                         help="ADMM stepsize")
     parser.add_argument("-l", "--lam", type=float, default=1.0,
                         help="ADMM stepsize")
@@ -255,7 +261,7 @@ if __name__ == '__main__':
     print('tau',tau,'lambda (after. scaling)',lam)
     ref  = pnm.imread(args.ref).astype(float)
     patch_shape = (8,8)
-    patch_stride = (2,2) # bad and fast, for testing
+    patch_stride = (args.stride,args.stride) # bad and fast, for testing
     dct_stats = dct_stats/np.min(dct_stats)
     weights = 1.0/dct_stats
     paco = PacoDeblocking(input, patch_stride, qtable,lam, weights,ref)

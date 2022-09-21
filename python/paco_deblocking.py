@@ -8,9 +8,9 @@ import numpy as np
 import pnm
 from scipy import fft
 import paco
-import patches
 import sys
-import os
+import argparse
+
 
 #-----------------------------------------------------------------------
 
@@ -44,7 +44,7 @@ class PacoDeblocking(paco.PACO):
     (with the exception of extracting/stitching)
 
     """
-    def __init__(self,input_signal,patch_stride,qtable,lam,weights):
+    def __init__(self,input_signal,patch_stride,qtable,lam,weights,ref):
         super().__init__(input_signal,(8,8),patch_stride)
         #
         # problem-specific parameters
@@ -52,28 +52,26 @@ class PacoDeblocking(paco.PACO):
         self.lam = lam
         self.weights = weights.ravel()
         self.qtable = qtable.ravel()
+        self.ref = ref
         #
         # build constraints for DCT blocks
         #
         print("extracting patches")
         self.input_patches = self.mapper.extract(self.input_signal)
         print("constructing constraint set")
-        self.constraints = list()
+        print("computing input DCT coefficients")
+        self.input_coeffs = np.empty(self.input_patches.shape)
+        self.do_dct(self.input_patches,self.input_coeffs)
+        self.box_hi =  10000*np.ones(self.mapper.patch_matrix_shape)
+        self.box_lo = -10000*np.ones(self.mapper.patch_matrix_shape)
         for k, gk in enumerate(np.ndindex(*self.mapper.grid_shape)):  # iterate over patch grid
             i,j = patch_stride * np.array(gk)
             if (i % 8 == 0) and (j % 8 == 0):
                 z = fft.dctn(np.reshape(self.input_patches[k,:],(8,8)),norm='ortho', type=2).ravel()
                 zlo = np.floor(z / self.qtable)*self.qtable
                 zhi = zlo + self.qtable
-                self.constraints.append((zlo,zhi))
-            else:
-                self.constraints.append(None)
-        #
-        # compute and store the input signal's DCT coefficients
-        #
-        print("computing input DCT coefficients")
-        self.input_coeffs = np.empty(self.input_patches.shape)
-        self.do_dct(self.input_patches,self.input_coeffs)
+                self.box_lo[k,:] = zlo
+                self.box_hi[k,:] = zhi
 
     @staticmethod
     def do_dct(x,xdct):
@@ -122,12 +120,13 @@ class PacoDeblocking(paco.PACO):
         """
         Problem-specific initialization
         """
-        #self.A[:] = np.copy(self.input_coeffs)
         self.A[:] = 0
-        self.B[:] = 0
+        self.A[:] = 0
+        self.B[:] = np.copy(self.input_coeffs)
         self.U[:] = 0
-        self.prevB[:] = 0
+        self.prevB[:] = np.copy(self.input_coeffs)
         self.iter = 0
+
 
     def prox_g(self, x, tau, px=None):
         """
@@ -154,37 +153,112 @@ class PacoDeblocking(paco.PACO):
             self.mapper.extract(self.aux_signal, px)
             self.do_dct(px,px)
             # constraint on box B
-            for i in range(self.mapper.num_patches):
-                if self.constraints[i] is not None:
-                    zlo,zhi = self.constraints[i]
-                    px[i,:] = np.minimum(np.maximum(px[i,:],zlo),zhi)
+            viol_hi = np.mean(np.maximum(0,px-self.box_hi))
+            viol_lo = np.mean(np.maximum(0,self.box_lo-px))
+            px = np.minimum(self.box_hi,np.maximum(self.box_lo,px))
             print('POCS',J,end=' ')
-            print(np.linalg.norm(px-prevx,'fro')/(1e-10+np.linalg.norm(px,'fro')))
+            print('dif',np.linalg.norm(px-prevx,'fro')/(1e-10+np.linalg.norm(px,'fro')),end=' ')
+            print('viol: lo',viol_lo,'up',viol_hi)
+        print()
+        return px
+
+    def prox_g_dykstra(self, x, tau, px=None):
+        """
+        Proximal operator of g(x): z = arg min g(x) + tau/2||z-x||^2_2
+        In this case g(x) is  the indicator function of the intersection between:
+        - the constraint set C
+        - the box constraints B on the DCT coefficients of the DCT blocks
+
+        The input x is actually in DCT space, so we need to convert to and from signal
+        space when doing the stitching/extraction
+
+        This version uses Dykstra's alternate projection method
+        """
+        print('prox_g')
+        if px is None:
+            px = np.empty(self.mapper.patch_matrix_shape)
+        np.copyto(px,x)
+        p = np.zeros(px.shape)
+        q = np.zeros(px.shape)
+        y = np.zeros(px.shape)
+        for J in range(5): # brutal, bad, lazy
+            prevx = np.copy(px)
+            self.do_idct(px+p,px)
+            # constraint on C
+            #
+            # 1) y <- proj(x+p)
+            #
+            self.mapper.stitch(px, self.aux_signal)
+            self.mapper.extract(self.aux_signal, px)
+            self.do_dct(px,y)
+            #
+            # 2) p <- p + x - y
+            #
+            p += px
+            p -= y
+            # constraint on box B
+            #
+            # 3) x <- proj(y+q)
+            #
+            viol_hi = np.sum(np.maximum(0,px-self.box_hi))
+            viol_lo = np.sum(np.maximum(0,self.box_lo-px))
+            px = np.minimum(self.box_hi,np.maximum(self.box_lo,px+q))
+            #
+            # 4) q <- q + y - x
+            #
+            q += y
+            q -= px
+            print('POCS',J,end=' ')
+            print('dif',np.linalg.norm(px-prevx,'fro')/(1e-10+np.linalg.norm(px,'fro')),end=' ')
+            print('viol: lo',viol_lo,'up',viol_hi)
         print()
         return px
 
 
     def monitor(self):
-        print(np.min(self.aux_signal),np.max(self.aux_signal))
+        #print(np.min(self.aux_signal),np.max(self.aux_signal))
         out = np.minimum(255,np.maximum(0,self.aux_signal+128)).astype(np.uint8)
         pnm.imsave(f'inpainting_iter_{self.iter:04d}.pnm', out)
-        pass
+        mse = np.sqrt(np.mean(np.square(self.ref - out)))
+        print('cost',np.mean(np.abs(self.A)),'mse',mse)
 
 
 if __name__ == '__main__':
+    epilog = "Output image file name is built from input name and parameters."
+    parser = argparse.ArgumentParser(epilog=epilog)
+    parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("-s", "--stride", type=int, default=1,
+                        help="patch stride")
+    parser.add_argument("-t", "--tau", type=float, default=0.1,
+                        help="ADMM stepsize")
+    parser.add_argument("-l", "--lam", type=float, default=1.0,
+                        help="ADMM stepsize")
+    parser.add_argument("-o", "--output", type=str, default="deblocked.pgm",
+                        help="output file.")
+    parser.add_argument("-S", "--stats", type=str, default="data/dct_stats.txt",
+                        help="DCT stats, for DCT coeff. weights.")
+
+    parser.add_argument("input", help="input image file")
+    parser.add_argument("qtable", help="mask image file")
+    parser.add_argument("ref", help="dictionary file (ASCII matrix, one atom per row)")
+    args = parser.parse_args()
+
+    cmd = " ".join(sys.argv)
+    print(("Command: " + cmd))
+
     dct_stats = np.loadtxt('data/dct_stats.txt')
-    qtable    = np.loadtxt('data/qtable.txt')
-    image     = sys.argv[1]
-    tau       = float(sys.argv[2])
-    lam       = float(sys.argv[3])
-    print('tau',tau,'lambda',lam)
-    #ref  = pnm.imread(os.path.join('data/',image))
-    jpg  = pnm.imread(image).astype(float)-128
+    qtable    = np.loadtxt(args.qtable)
+    input  = pnm.imread(args.input).astype(float)-128
+    tau       = args.tau
+    lam       = args.lam*128
+
+    print('tau',tau,'lambda (after. scaling)',lam)
+    ref  = pnm.imread(args.ref).astype(float)
     patch_shape = (8,8)
-    patch_stride = (4,4) # bad and fast, for testing
+    patch_stride = (2,2) # bad and fast, for testing
     dct_stats = dct_stats/np.min(dct_stats)
     weights = 1.0/dct_stats
-    paco = PacoDeblocking(jpg, patch_stride, qtable,lam, weights)
+    paco = PacoDeblocking(input, patch_stride, qtable,lam, weights,ref)
     paco.init()
     paco.run(tau,check_every=1)
     out = paco.aux_signal+128

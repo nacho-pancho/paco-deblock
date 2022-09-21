@@ -135,6 +135,7 @@
 /*
  * Perform the forward DCT on one block of samples.
  */
+static int nacho_counter = 0;
 
 GLOBAL(void)
 jpeg_fdct_islow (DCTELEM * data)
@@ -145,11 +146,15 @@ jpeg_fdct_islow (DCTELEM * data)
   DCTELEM *dataptr;
   int ctr;
   SHIFT_TEMPS
-  printf("forward DCT");
   /* Pass 1: process rows. */
   /* Note results are scaled up by sqrt(8) compared to a true DCT; */
-  /* furthermore, we scale the results by 2**PASS1_BITS. */
-
+  /* furthermore, we scale the results by 2**PASS1_BITS. */  
+  printf("input %08d\n",++nacho_counter);
+  for (ctr= 0; ctr < 64; ctr++) {
+    printf("%8d",data[ctr]);
+    if ((ctr > 0) && !((ctr+1) % 8)) printf("\n"); 
+  }
+  printf("\n");
   dataptr = data;
   for (ctr = DCTSIZE-1; ctr >= 0; ctr--) {
     tmp0 = dataptr[0] + dataptr[7];
@@ -277,6 +282,11 @@ jpeg_fdct_islow (DCTELEM * data)
 					   CONST_BITS+PASS1_BITS);
     
     dataptr++;			/* advance pointer to next column */
+  }
+  printf("output %08d\n",nacho_counter);
+  for (ctr= 0; ctr < 64; ctr++) {
+    printf("%8d",data[ctr]);
+    if ((ctr > 0) && !((ctr+1) % 8)) printf("\n"); 
   }
 }
 

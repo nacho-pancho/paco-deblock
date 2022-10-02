@@ -224,7 +224,7 @@ class PacoDeblocking(paco.PACO):
     def monitor(self):
         #print(np.min(self.aux_signal),np.max(self.aux_signal))
         out = np.minimum(255,np.maximum(0,self.aux_signal+128)).astype(np.uint8)
-        pnm.imsave(f'inpainting_iter_{self.iter:04d}.pnm', out)
+        pnm.imsave(f'results/iter_{self.iter:04d}.pnm', out)
         mse = np.sqrt(np.mean(np.square(self.ref - out)))
         print('cost',np.mean(np.abs(self.A)),'mse',mse)
 
